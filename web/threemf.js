@@ -240,6 +240,54 @@ function displayColor(value) {
   return [1, 3, 5].map((i) => linear(parseInt(value.slice(i, i + 2), 16)));
 }
 
+const paintStateCache = new Map();
+function paintState(value) {
+  if (!value || !/^[\da-f]+$/i.test(value)) return null;
+  if (paintStateCache.has(value)) return paintStateCache.get(value);
+  const tokens = [...value].reverse().map((c) => parseInt(c, 16));
+  let at = 0;
+  const counts = new Map();
+  let budget = tokens.length * 4;
+  function readNode(depth = 0) {
+    if (at >= tokens.length || depth > 64 || --budget < 0) return;
+    const token = tokens[at++];
+    const splitSides = token & 3;
+    if (splitSides) {
+      for (let i = 0; i < splitSides + 1; i++) readNode(depth + 1);
+      return;
+    }
+    const shortState = token >> 2;
+    const state = shortState === 3 && at < tokens.length ? 3 + tokens[at++] : shortState;
+    counts.set(state, (counts.get(state) || 0) + 1);
+  }
+  readNode();
+  let best = null, count = -1;
+  for (const [state, n] of counts) if (n > count) { best = state; count = n; }
+  paintStateCache.set(value, best);
+  return best;
+}
+
+const linearColor = (value) => {
+  const rgb = displayColor(value);
+  return rgb ? rgb : null;
+};
+
+function getDefaultFilament(parts, objectId) {
+  const data = parts.get('Metadata/model_settings.config');
+  if (!data) return 0;
+  let currentObject = null;
+  let index = 0;
+  scanXML(new TextDecoder().decode(data), (tag, attrs) => {
+    const name = local(tag);
+    if (name === 'object') currentObject = String(attrs.id);
+    else if (name === 'metadata' && currentObject === String(objectId)
+        && attrs.key === 'extruder' && Number.isFinite(+attrs.value)) {
+      index = Math.max(0, (+attrs.value | 0) - 1);
+    }
+  }, (tag) => { if (local(tag) === 'object') currentObject = null; });
+  return index;
+}
+
 /**
  * An attribute by LOCAL name. The production extension is conventionally the
  * `p:` prefix (p:path, p:UUID), but the prefix is the file's to choose, so we
@@ -329,7 +377,10 @@ function parseModelXML(xml) {
         if (cur) {
           cur.tris.push(+a.v1, +a.v2, +a.v3);
           const palette = a.pid != null ? baseMaterials.get(String(a.pid)) : null;
-          cur.triColors.push(palette && a.p1 != null ? palette[+a.p1] || null : null);
+          cur.triColors.push(a.paint_color != null
+            ? paintState(a.paint_color)
+            : palette && a.p1 != null ? palette[+a.p1] || null : null);
+          if (a.paint_color != null) cur.hasPaintColors = true;
         }
         break;
       case 'component':
@@ -410,7 +461,14 @@ function emitObject(getPart, path, id, m, out, outColors, colorState, seen, stat
       stats.dropped++;
       continue;
     }
-    const rgb = displayColor(obj.triColors[t / 3]);
+    const style = obj.triColors[t / 3];
+    let rgb = typeof style === 'string' ? displayColor(style) : null;
+    if (!rgb && (typeof style === 'number' || obj.hasPaintColors)) {
+      const slot = style === 0 || style == null
+        ? colorState.defaultFilament
+        : style - 1;
+      rgb = colorState.filamentColors[slot] || null;
+    }
     if (rgb) colorState.hasColor = true;
     for (const o of [o0, o1, o2]) {
       const x = verts[o], y = verts[o + 1], z = verts[o + 2];
@@ -503,6 +561,14 @@ export async function readThreeMF(bytes) {
   const scale = UNIT_MM[unit] ?? 1;
   const names = parseObjectNames(parts.has('Metadata/model_settings.config')
     ? new TextDecoder().decode(parts.get('Metadata/model_settings.config')) : null);
+  const settings = parts.get('Metadata/project_settings.config');
+  let filamentColors = [];
+  if (settings) {
+    try {
+      const config = JSON.parse(new TextDecoder().decode(settings));
+      filamentColors = (config.filament_colour || []).map(linearColor);
+    } catch { /* A missing or non-JSON slicer profile simply has no palette. */ }
+  }
 
   // Each <build><item> is one pickable object. No <build> is a valid-but-empty
   // plate; a few CAD exporters omit it, so fall back to the mesh/assembly objects
@@ -518,7 +584,11 @@ export async function readThreeMF(bytes) {
   for (const item of roots) {
     const out = [];
     const outColors = [];
-    const colorState = { hasColor: false };
+    const colorState = {
+      hasColor: false,
+      filamentColors,
+      defaultFilament: getDefaultFilament(parts, item.objectid),
+    };
     const stats = { meshes: 0, skipped: 0, dropped: 0, missing: 0 };
     emitObject(getPart, rootName, item.objectid, item.transform, out, outColors, colorState, new Set(), stats);
     // Fold stats first: a build item that was ALL support/dangling emits nothing
