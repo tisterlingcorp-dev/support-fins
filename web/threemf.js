@@ -27,6 +27,7 @@ const NS_CORE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
 const REL_3DMODEL = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
 const CT_MODEL = 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml';
 const CT_RELS = 'application/vnd.openxmlformats-package.relationships+xml';
+const NS_BAMBU = 'http://schemas.bambulab.com/package/2021';
 
 // Trim a coordinate to a compact decimal string. 6 decimals is well under the
 // ~1um that matters for a print and keeps the model file small.
@@ -51,6 +52,13 @@ function linearToSrgb(linear) {
 function colorHex(color) {
   if (!color || color.length < 3) return null;
   return `#${color.map((c) => Math.round(linearToSrgb(c) * 255).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+// Bambu Studio's face-paint encoding stores one 4-bit state per face. State 1
+// selects filament 1, etc. Values 1-2 fit in one nibble; 3+ use an escape nibble.
+function paintColor(index) {
+  const state = index + 1;
+  return state <= 2 ? (state << 2).toString(16) : `${(state - 3).toString(16)}c`;
 }
 
 function meshXML(tris, colorIndices = null) {
@@ -85,7 +93,9 @@ function meshXML(tris, colorIndices = null) {
   const f = new Array(faces.length);
   for (let i = 0; i < faces.length; i++) {
     const { idx, color } = faces[i];
-    const props = color != null ? ` pid="4" p1="${color}"` : '';
+    const props = color != null
+      ? ` pid="4" p1="${color}" paint_color="${paintColor(color)}"`
+      : '';
     f[i] = `<triangle v1="${idx[0]}" v2="${idx[1]}" v3="${idx[2]}"${props}/>`;
   }
   return `<mesh><vertices>${v.join('')}</vertices><triangles>${f.join('')}</triangles></mesh>`;
@@ -127,11 +137,29 @@ function modelXML(partTris, finTris, title, partColors) {
 
   const safeTitle = String(title).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
   return '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    `<model unit="millimeter" xml:lang="en-US" xmlns="${NS_CORE}">` +
-    '<metadata name="Application">Support Fins</metadata>' +
+    `<model unit="millimeter" xml:lang="en-US" xmlns="${NS_CORE}" xmlns:BambuStudio="${NS_BAMBU}">` +
+    '<metadata name="Application">BambuStudio-2.0.0.3</metadata>' +
+    '<metadata name="BambuStudio:3mfVersion">1</metadata>' +
     `<metadata name="Title">${safeTitle}</metadata>` +
     `<resources>${materials}${objects.join('')}</resources>` +
     `<build><item objectid="${buildId}"/></build></model>`;
+}
+
+function bambuModelSettings(hasFins) {
+  const items = ['<object id="1"><metadata key="extruder" value="1"/></object>'];
+  if (hasFins) items.push('<object id="2"><metadata key="extruder" value="1"/></object>');
+  if (hasFins) items.push('<object id="3"><metadata key="extruder" value="1"/></object>');
+  return `<?xml version="1.0" encoding="UTF-8"?><config>${items.join('')}</config>`;
+}
+
+function bambuProjectSettings(palette) {
+  return JSON.stringify({
+    filament_colour: palette,
+    filament_type: palette.map(() => 'PLA'),
+    filament_settings_id: palette.map(() => 'Generic PLA'),
+    filament_vendor: palette.map(() => 'Generic'),
+    filament_diameter: palette.map(() => '1.75'),
+  }, null, 2);
 }
 
 const CONTENT_TYPES = '<?xml version="1.0" encoding="UTF-8"?>\n' +
@@ -150,10 +178,25 @@ const ROOT_RELS = '<?xml version="1.0" encoding="UTF-8"?>\n' +
  * @returns Blob    a .3mf package
  */
 export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColors = null) {
+  // The core 3MF palette keeps colors visible in generic viewers. Bambu Studio
+  // also needs its per-face paint_color extension and filament color slots.
+  const palette = [];
+  if (partColors) {
+    for (let i = 0; i + 2 < partColors.length; i += 3) {
+      const hex = colorHex([partColors[i], partColors[i + 1], partColors[i + 2]]);
+      if (hex && !palette.includes(hex)) palette.push(hex);
+    }
+  }
+  const hasFins = !!(finTris && finTris.length);
+  const contentTypes = CONTENT_TYPES.replace('</Types>', '<Default Extension="config" ContentType="application/xml"/></Types>');
   return zipStore([
-    { name: '[Content_Types].xml', data: CONTENT_TYPES },
+    { name: '[Content_Types].xml', data: contentTypes },
     { name: '_rels/.rels', data: ROOT_RELS },
     { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name, partColors) },
+    ...(palette.length ? [
+      { name: 'Metadata/project_settings.config', data: bambuProjectSettings(palette) },
+      { name: 'Metadata/model_settings.config', data: bambuModelSettings(hasFins) },
+    ] : []),
   ]);
 }
 

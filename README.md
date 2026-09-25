@@ -32,7 +32,7 @@ now you had to CAD it by hand every time.
 4. Export. Fins and a bed pad come baked into the STL (or 3MF).
 
 When the imported model has face colors, 3MF export preserves them with standard
-base materials. STL export writes per-face colors using a widely supported but
+base materials and Bambu Studio's per-face filament-paint data. STL export writes per-face colors using a widely supported but
 unofficial binary STL convention; software support varies, so prefer 3MF when color
 preservation matters.
 
@@ -100,8 +100,9 @@ Consortium's own reference files). The part imports correctly oriented and sized
 fins come in as intended. Just slice with supports off. (OrcaSlicer opens it without a
 notice.)
 
-The export carries geometry and, when present in the source, standard face display
-colors; it contains **no slicer profile** on purpose. Baking in a profile would silence
+The export carries geometry, standard face display colors, and (for Bambu Studio)
+per-face filament assignments plus the matching color palette. It contains **no printer
+or print profile** on purpose. Baking in a profile would silence
 the notice but replace whoever-opens-it's printer/filament/print settings with ours on
 load, and it would have to be re-authored per slicer *and* per slicer version — a worse
 trade than a one-time, benign notice on a file whose geometry is already right. See

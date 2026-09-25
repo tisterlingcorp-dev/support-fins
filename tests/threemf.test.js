@@ -13,7 +13,7 @@
 import { WEB, MODELS, assert, assertClose, block, readSTL, buildTopology, analyze, rotX } from './_util.js';
 
 const { writeThreeMF, readThreeMF } = await import(`${WEB}threemf.js`);
-const { zipStore } = await import(`${WEB}zip.js`);
+const { zipStore, unzip } = await import(`${WEB}zip.js`);
 
 const REL = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
 
@@ -38,6 +38,26 @@ function bounds(positions) {
 }
 
 const CUBE = triples(block(0, 1, 0, 1, 0, 1));
+
+Deno.test('3MF color export includes Bambu per-face paint and matching filament palette', async () => {
+  const colors = new Float32Array([
+    0, 0, 0,       // black -> filament 1, paint state 1
+    1, 1, 1,       // white -> filament 2, paint state 2
+    0.5, 0.5, 0.5, // gray -> filament 3, escaped paint state 3
+    0.2, 0.2, 0.2, // darker gray -> filament 4, escaped paint state 4
+  ]);
+  const tris = CUBE.slice(0, 12);
+  const blob = writeThreeMF(tris, [], 'colored', colors);
+  const files = await unzip(new Uint8Array(await blob.arrayBuffer()));
+  const model = new TextDecoder().decode(files.get('3D/3dmodel.model'));
+  const settings = JSON.parse(new TextDecoder().decode(files.get('Metadata/project_settings.config')));
+  assert(model.includes('paint_color="4"') && model.includes('paint_color="8"')
+    && model.includes('paint_color="0c"') && model.includes('paint_color="1c"'),
+  'Bambu face-paint states 1-4 were not written');
+  assert(settings.filament_colour.join(',') === '#000000,#FFFFFF,#BCBCBC,#7C7C7C',
+    `filament palette ${settings.filament_colour}, expected the same order as the face colors`);
+  assert(files.has('Metadata/model_settings.config'), 'Bambu model settings missing');
+});
 
 /** A one-triangle model part, so a test can state unit/transform in isolation. */
 function modelXML({ unit = 'millimeter', extraObjects = '', build = '<item objectid="1"/>' } = {}) {
