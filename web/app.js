@@ -40,6 +40,8 @@ const partMaterial = new THREE.MeshStandardMaterial({
 export let part = null;
 export let partName = '';
 export let partHasImportedColors = false;
+export let partPaintColors = null;
+export let partFilamentPalette = null;
 export let topology = null;      // welded adjacency, rebuilt only when the mesh changes
 let weldMs = 0;
 export let analysisTiming = '';
@@ -114,6 +116,8 @@ const SHADE = {
  * z=0. Returns the measured size so the caller can report it.
  */
 export function setPart(geometry, filename) {
+  partPaintColors = geometry.userData?.paintColors || null;
+  partFilamentPalette = geometry.userData?.filamentPalette || null;
   if (part) {
     part.geometry.dispose();
     scene.remove(part);

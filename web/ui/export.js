@@ -4,7 +4,10 @@
 import { writeBinarySTL, download } from '../stl.js';
 import { writeThreeMF } from '../threemf.js';
 import { el } from './dom.js';
-import { part, topology, lastResult, rotM3, partName, activeAdded, partHasImportedColors } from '../app.js';
+import {
+  part, topology, lastResult, rotM3, partName, activeAdded, partHasImportedColors,
+  partPaintColors, partFilamentPalette,
+} from '../app.js';
 
 /**
  * Export the part AS ORIENTED, seated on the plate, with the fins as extra
@@ -48,7 +51,7 @@ export function buildExportGeometry() {
   // in Suggest -- plus the pad, all already in print space
   const finTris = [...activeAdded()];
   const base = partName.replace(/\.(stl|3mf|step|stp)$/i, '') || 'part';
-  return { partTris, finTris, partColors, base };
+  return { partTris, finTris, partColors, partPaintColors, partFilamentPalette, base };
 }
 
 /**
@@ -82,5 +85,6 @@ el('export-3mf').addEventListener('click', () => {
   const g = buildExportGeometry();
   if (!g) return;
   const finColor = g.partColors ? [0.1, 0.65, 0.38] : null;
-  download(writeThreeMF(g.partTris, g.finTris, g.base, g.partColors, finColor), `${g.base}-fins.3mf`);
+  download(writeThreeMF(g.partTris, g.finTris, g.base, g.partColors, finColor,
+    g.partPaintColors, g.partFilamentPalette), `${g.base}-fins.3mf`);
 });

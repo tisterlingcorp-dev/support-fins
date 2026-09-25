@@ -61,7 +61,7 @@ function paintColor(index) {
   return state <= 2 ? (state << 2).toString(16) : `${(state - 3).toString(16)}c`;
 }
 
-function meshXML(tris, colorIndices = null) {
+function meshXML(tris, colorIndices = null, paintIndices = null, rawPaintColors = null) {
   const index = new Map();
   const verts = [];
   const faces = [];
@@ -81,7 +81,13 @@ function meshXML(tris, colorIndices = null) {
     // Drop any triangle that collapsed to a line/point after the merge; a
     // degenerate face is invalid 3MF and some readers reject the whole model.
     if (idx[0] !== idx[1] && idx[1] !== idx[2] && idx[0] !== idx[2]) {
-      faces.push({ idx, color: colorIndices ? colorIndices[t / 3] : null });
+      const face = t / 3;
+      faces.push({
+        idx,
+        color: colorIndices ? colorIndices[face] : null,
+        paint: rawPaintColors?.[face] || (paintIndices && paintIndices[face] != null
+          ? paintColor(paintIndices[face]) : null),
+      });
     }
   }
 
@@ -92,22 +98,24 @@ function meshXML(tris, colorIndices = null) {
   }
   const f = new Array(faces.length);
   for (let i = 0; i < faces.length; i++) {
-    const { idx, color } = faces[i];
+    const { idx, color, paint } = faces[i];
     const props = color != null
-      ? ` pid="4" p1="${color}" paint_color="${paintColor(color)}"`
+      ? ` pid="4" p1="${color}"${paint != null ? ` paint_color="${paint}"` : ''}`
       : '';
     f[i] = `<triangle v1="${idx[0]}" v2="${idx[1]}" v3="${idx[2]}"${props}/>`;
   }
   return `<mesh><vertices>${v.join('')}</vertices><triangles>${f.join('')}</triangles></mesh>`;
 }
 
-function modelXML(partTris, finTris, title, partColors, finColor) {
+function modelXML(partTris, finTris, title, partColors, finColor, rawPaintColors, bambuPalette) {
   const palette = [];
   const paletteIndex = new Map();
   let colorIndices = null;
+  let paintIndices = null;
   if (partColors) {
     const faceCount = Math.floor(partColors.length / 3);
     colorIndices = new Array(faceCount);
+    paintIndices = new Array(faceCount);
     for (let face = 0; face < faceCount; face++) {
       const i = face * 3;
       const hex = colorHex([partColors[i], partColors[i + 1], partColors[i + 2]]);
@@ -117,6 +125,8 @@ function modelXML(partTris, finTris, title, partColors, finColor) {
         palette.push(hex);
       }
       colorIndices[face] = paletteIndex.get(hex);
+      const slot = bambuPalette.indexOf(hex);
+      paintIndices[face] = slot >= 0 ? slot : null;
     }
   }
   let finColorIndex = null;
@@ -131,12 +141,14 @@ function modelXML(partTris, finTris, title, partColors, finColor) {
   const materials = palette.length
     ? `<basematerials id="4">${palette.map((color, i) => `<base name="Color ${i + 1}" displaycolor="${color}"/>`).join('')}</basematerials>`
     : '';
-  const objects = [`<object id="1" type="model">${meshXML(partTris, colorIndices)}</object>`];
+  const objects = [`<object id="1" type="model">${meshXML(partTris, colorIndices, paintIndices, rawPaintColors)}</object>`];
   let buildId = 1;
 
   if (finTris && finTris.length) {
     const finColors = finColorIndex == null ? null : new Array(Math.floor(finTris.length / 3)).fill(finColorIndex);
-    objects.push(`<object id="2" type="model">${meshXML(finTris, finColors)}</object>`);
+    const finSlot = finColor ? bambuPalette.indexOf(colorHex(finColor)) : -1;
+    const finPaint = finSlot < 0 ? null : new Array(Math.floor(finTris.length / 3)).fill(finSlot);
+    objects.push(`<object id="2" type="model">${meshXML(finTris, finColors, finPaint)}</object>`);
     // An assembly object so the part and fins import as one locked unit while
     // remaining two distinct meshes.
     objects.push(
@@ -187,28 +199,35 @@ const ROOT_RELS = '<?xml version="1.0" encoding="UTF-8"?>\n' +
  * @param name      written as the model Title
  * @returns Blob    a .3mf package
  */
-export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColors = null, finColor = null) {
+export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColors = null,
+  finColor = null, rawPaintColors = null, sourceFilamentPalette = null) {
   // The core 3MF palette keeps colors visible in generic viewers. Bambu Studio
   // also needs its per-face paint_color extension and filament color slots.
-  const palette = [];
+  const corePalette = [];
   if (partColors) {
     for (let i = 0; i + 2 < partColors.length; i += 3) {
       const hex = colorHex([partColors[i], partColors[i + 1], partColors[i + 2]]);
-      if (hex && !palette.includes(hex)) palette.push(hex);
+      if (hex && !corePalette.includes(hex)) corePalette.push(hex);
     }
   }
   if (finTris && finTris.length && finColor) {
     const hex = colorHex(finColor);
-    if (hex && !palette.includes(hex)) palette.push(hex);
+    if (hex && !corePalette.includes(hex)) corePalette.push(hex);
   }
+  const bambuPalette = (sourceFilamentPalette || [])
+    .filter((hex) => /^#[\da-f]{6}$/i.test(hex)).map((hex) => hex.toUpperCase());
+  if (!bambuPalette.length) bambuPalette.push(...corePalette);
+  for (const hex of corePalette) if (!bambuPalette.includes(hex.toUpperCase())) bambuPalette.push(hex.toUpperCase());
+  const settingsPalette = bambuPalette.map((hex) => hex.toUpperCase());
   const hasFins = !!(finTris && finTris.length);
   const contentTypes = CONTENT_TYPES.replace('</Types>', '<Default Extension="config" ContentType="application/xml"/></Types>');
   return zipStore([
     { name: '[Content_Types].xml', data: contentTypes },
     { name: '_rels/.rels', data: ROOT_RELS },
-    { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name, partColors, finColor) },
-    ...(palette.length ? [
-      { name: 'Metadata/project_settings.config', data: bambuProjectSettings(palette) },
+    { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name, partColors, finColor,
+      rawPaintColors, settingsPalette) },
+    ...(settingsPalette.length ? [
+      { name: 'Metadata/project_settings.config', data: bambuProjectSettings(settingsPalette) },
       { name: 'Metadata/model_settings.config', data: bambuModelSettings(hasFins) },
     ] : []),
   ]);
@@ -444,7 +463,7 @@ function parseModelXML(xml) {
         if (a.unit) unit = a.unit;
         break;
       case 'object':
-        cur = { type: a.type || 'model', name: a.name || '', verts: [], tris: [], triColors: [], components: [] };
+        cur = { type: a.type || 'model', name: a.name || '', verts: [], tris: [], triColors: [], triPaintColors: [], components: [] };
         objects.set(String(a.id), cur);
         if (selfClosing) cur = null;
         break;
@@ -470,6 +489,7 @@ function parseModelXML(xml) {
           cur.triColors.push(a.paint_color != null
             ? paintState(a.paint_color)
             : palette && a.p1 != null ? palette[+a.p1] || null : null);
+          cur.triPaintColors.push(a.paint_color != null ? a.paint_color : null);
           if (a.paint_color != null) cur.hasPaintColors = true;
         }
         break;
@@ -530,7 +550,7 @@ function parseObjectNames(configXML) {
  * `seen` breaks a component cycle: a malformed file can reference itself, the
  * spec forbids it, so bailing is correct rather than recursing forever.
  */
-function emitObject(getPart, path, id, m, out, outColors, colorState, seen, stats) {
+function emitObject(getPart, path, id, m, out, outColors, outPaintColors, colorState, seen, stats) {
   const part = getPart(path);
   const obj = part && part.objects.get(id);
   if (!obj) { stats.missing++; return; }        // dangling ref: a broken file
@@ -552,6 +572,7 @@ function emitObject(getPart, path, id, m, out, outColors, colorState, seen, stat
       continue;
     }
     const style = obj.triColors[t / 3];
+    outPaintColors.push(obj.triPaintColors[t / 3] || null);
     let rgb = typeof style === 'string' ? displayColor(style) : null;
     if (!rgb && (typeof style === 'number' || obj.hasPaintColors)) {
       const slot = style === 0 || style == null
@@ -577,7 +598,8 @@ function emitObject(getPart, path, id, m, out, outColors, colorState, seen, stat
 
   for (const c of obj.components) {
     const childPath = c.path ? partName(c.path) : path;
-    emitObject(getPart, childPath, c.objectid, compose(c.transform, m), out, outColors, colorState, seen, stats);
+    emitObject(getPart, childPath, c.objectid, compose(c.transform, m), out, outColors,
+      outPaintColors, colorState, seen, stats);
   }
   seen.delete(key);
 }
@@ -653,9 +675,11 @@ export async function readThreeMF(bytes) {
     ? new TextDecoder().decode(parts.get('Metadata/model_settings.config')) : null);
   const settings = parts.get('Metadata/project_settings.config');
   let filamentColors = [];
+  let filamentPalette = [];
   if (settings) {
     try {
       const config = JSON.parse(new TextDecoder().decode(settings));
+      filamentPalette = config.filament_colour || [];
       filamentColors = (config.filament_colour || []).map(linearColor);
     } catch { /* A missing or non-JSON slicer profile simply has no palette. */ }
   }
@@ -674,13 +698,15 @@ export async function readThreeMF(bytes) {
   for (const item of roots) {
     const out = [];
     const outColors = [];
+    const outPaintColors = [];
     const colorState = {
       hasColor: false,
       filamentColors,
       defaultFilament: getDefaultFilament(parts, item.objectid),
     };
     const stats = { meshes: 0, skipped: 0, dropped: 0, missing: 0 };
-    emitObject(getPart, rootName, item.objectid, item.transform, out, outColors, colorState, new Set(), stats);
+    emitObject(getPart, rootName, item.objectid, item.transform, out, outColors, outPaintColors,
+      colorState, new Set(), stats);
     // Fold stats first: a build item that was ALL support/dangling emits nothing
     // but its skipped count still has to be reported, not dropped with the item.
     agg.meshes += stats.meshes; agg.skipped += stats.skipped; agg.dropped += stats.dropped;
@@ -694,6 +720,8 @@ export async function readThreeMF(bytes) {
       name: names.get(item.objectid) || (rootObj && rootObj.name) || `Object ${objects.length + 1}`,
       positions,
       colors: colorState.hasColor ? new Float32Array(outColors) : null,
+      paintColors: outPaintColors.some(Boolean) ? outPaintColors : null,
+      filamentPalette,
       tris: positions.length / 9,
       meshes: stats.meshes,
       skipped: stats.skipped,

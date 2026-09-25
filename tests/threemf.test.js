@@ -60,6 +60,20 @@ Deno.test('3MF color export includes Bambu per-face paint and matching filament 
   assert(files.has('Metadata/model_settings.config'), 'Bambu model settings missing');
 });
 
+Deno.test('3MF color export preserves subdivided Bambu eye-paint data and source slot order', async () => {
+  const sourcePalette = ['#000000', '#F4D976', '#FFFFFF', '#008000'];
+  const colors = new Float32Array([0, 0, 0, 0.95, 0.42, 0.08]);
+  const tris = [[[0, 0, 0], [1, 0, 0], [0, 1, 0]], [[2, 0, 0], [3, 0, 0], [2, 1, 0]]].flat();
+  const blob = writeThreeMF(tris, [], 'painted eyes', colors, null,
+    ['01C1C1C3', null], sourcePalette);
+  const files = await unzip(new Uint8Array(await blob.arrayBuffer()));
+  const model = new TextDecoder().decode(files.get('3D/3dmodel.model'));
+  const settings = JSON.parse(new TextDecoder().decode(files.get('Metadata/project_settings.config')));
+  assert(model.includes('paint_color="01C1C1C3"'), 'sub-triangle paint data was flattened');
+  assert(settings.filament_colour.slice(0, 4).join(',') === sourcePalette.join(','),
+    `source filament slot order changed: ${settings.filament_colour}`);
+});
+
 /** A one-triangle model part, so a test can state unit/transform in isolation. */
 function modelXML({ unit = 'millimeter', extraObjects = '', build = '<item objectid="1"/>' } = {}) {
   const verts = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]

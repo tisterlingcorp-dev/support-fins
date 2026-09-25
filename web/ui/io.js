@@ -149,6 +149,10 @@ async function parseModel(buffer) {
   }
 
   const geometry = geometryFromPositions(mergeObjectPositions(chosen), mergeObjectColors(chosen));
+  if (chosen.length === 1) {
+    geometry.userData.paintColors = chosen[0].paintColors;
+    geometry.userData.filamentPalette = chosen[0].filamentPalette;
+  }
 
   // Say what we decided for them: which/how many bodies, any support bodies left
   // on the plate, and any unit conversion.
