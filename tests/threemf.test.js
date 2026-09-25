@@ -47,15 +47,16 @@ Deno.test('3MF color export includes Bambu per-face paint and matching filament 
     0.2, 0.2, 0.2, // darker gray -> filament 4, escaped paint state 4
   ]);
   const tris = CUBE.slice(0, 12);
-  const blob = writeThreeMF(tris, [], 'colored', colors);
+  const blob = writeThreeMF(tris, tris.slice(0, 3), 'colored', colors, [0.1, 0.65, 0.38]);
   const files = await unzip(new Uint8Array(await blob.arrayBuffer()));
   const model = new TextDecoder().decode(files.get('3D/3dmodel.model'));
   const settings = JSON.parse(new TextDecoder().decode(files.get('Metadata/project_settings.config')));
   assert(model.includes('paint_color="4"') && model.includes('paint_color="8"')
-    && model.includes('paint_color="0c"') && model.includes('paint_color="1c"'),
-  'Bambu face-paint states 1-4 were not written');
-  assert(settings.filament_colour.join(',') === '#000000,#FFFFFF,#BCBCBC,#7C7C7C',
-    `filament palette ${settings.filament_colour}, expected the same order as the face colors`);
+    && model.includes('paint_color="0c"') && model.includes('paint_color="1c"')
+    && model.includes('displaycolor="#59D3A6"') && model.includes('p1="4" paint_color="2c"'),
+  'Bambu face-paint states 1-4 and the teal support color were not written');
+  assert(settings.filament_colour.join(',') === '#000000,#FFFFFF,#BCBCBC,#7C7C7C,#59D3A6',
+    `filament palette ${settings.filament_colour}, expected the face colors followed by teal`);
   assert(files.has('Metadata/model_settings.config'), 'Bambu model settings missing');
 });
 

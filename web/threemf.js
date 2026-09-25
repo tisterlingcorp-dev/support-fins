@@ -101,7 +101,7 @@ function meshXML(tris, colorIndices = null) {
   return `<mesh><vertices>${v.join('')}</vertices><triangles>${f.join('')}</triangles></mesh>`;
 }
 
-function modelXML(partTris, finTris, title, partColors) {
+function modelXML(partTris, finTris, title, partColors, finColor) {
   const palette = [];
   const paletteIndex = new Map();
   let colorIndices = null;
@@ -119,6 +119,15 @@ function modelXML(partTris, finTris, title, partColors) {
       colorIndices[face] = paletteIndex.get(hex);
     }
   }
+  let finColorIndex = null;
+  if (finTris && finTris.length && finColor) {
+    const hex = colorHex(finColor);
+    if (!paletteIndex.has(hex)) {
+      paletteIndex.set(hex, palette.length);
+      palette.push(hex);
+    }
+    finColorIndex = paletteIndex.get(hex);
+  }
   const materials = palette.length
     ? `<basematerials id="4">${palette.map((color, i) => `<base name="Color ${i + 1}" displaycolor="${color}"/>`).join('')}</basematerials>`
     : '';
@@ -126,7 +135,8 @@ function modelXML(partTris, finTris, title, partColors) {
   let buildId = 1;
 
   if (finTris && finTris.length) {
-    objects.push(`<object id="2" type="model">${meshXML(finTris)}</object>`);
+    const finColors = finColorIndex == null ? null : new Array(Math.floor(finTris.length / 3)).fill(finColorIndex);
+    objects.push(`<object id="2" type="model">${meshXML(finTris, finColors)}</object>`);
     // An assembly object so the part and fins import as one locked unit while
     // remaining two distinct meshes.
     objects.push(
@@ -177,7 +187,7 @@ const ROOT_RELS = '<?xml version="1.0" encoding="UTF-8"?>\n' +
  * @param name      written as the model Title
  * @returns Blob    a .3mf package
  */
-export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColors = null) {
+export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColors = null, finColor = null) {
   // The core 3MF palette keeps colors visible in generic viewers. Bambu Studio
   // also needs its per-face paint_color extension and filament color slots.
   const palette = [];
@@ -187,12 +197,16 @@ export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColor
       if (hex && !palette.includes(hex)) palette.push(hex);
     }
   }
+  if (finTris && finTris.length && finColor) {
+    const hex = colorHex(finColor);
+    if (hex && !palette.includes(hex)) palette.push(hex);
+  }
   const hasFins = !!(finTris && finTris.length);
   const contentTypes = CONTENT_TYPES.replace('</Types>', '<Default Extension="config" ContentType="application/xml"/></Types>');
   return zipStore([
     { name: '[Content_Types].xml', data: contentTypes },
     { name: '_rels/.rels', data: ROOT_RELS },
-    { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name, partColors) },
+    { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name, partColors, finColor) },
     ...(palette.length ? [
       { name: 'Metadata/project_settings.config', data: bambuProjectSettings(palette) },
       { name: 'Metadata/model_settings.config', data: bambuModelSettings(hasFins) },

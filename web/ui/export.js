@@ -81,5 +81,6 @@ el('export').addEventListener('click', () => {
 el('export-3mf').addEventListener('click', () => {
   const g = buildExportGeometry();
   if (!g) return;
-  download(writeThreeMF(g.partTris, g.finTris, g.base, g.partColors), `${g.base}-fins.3mf`);
+  const finColor = g.partColors ? [0.1, 0.65, 0.38] : null;
+  download(writeThreeMF(g.partTris, g.finTris, g.base, g.partColors, finColor), `${g.base}-fins.3mf`);
 });
