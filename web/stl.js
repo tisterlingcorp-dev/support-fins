@@ -19,15 +19,28 @@ const PER_TRI = 50;
  * @param name  written into the header for provenance
  * @returns Blob
  */
-export function writeBinarySTL(tris, name = 'Support Fins') {
+export function writeBinarySTL(tris, name = 'Support Fins', colors = null) {
   const count = Math.floor(tris.length / 3);
   const buf = new ArrayBuffer(HEADER + 4 + count * PER_TRI);
   const view = new DataView(buf);
 
   // Plain hyphen, not an em dash: the & 0x7f mask below turns an em dash into
   // control byte 0x14 rather than dropping it.
-  const header = `${name} - support-fins`.slice(0, 79);
-  for (let i = 0; i < header.length; i++) view.setUint8(i, header.charCodeAt(i) & 0x7f);
+  const header = `${name} - support-fins`;
+  if (colors) {
+    // Magics-style binary STL colors: a default COLOR=RGBA in the header,
+    // overridden per facet through the 15-bit attribute word.
+    view.setUint8(0, 0x43); view.setUint8(1, 0x4f); view.setUint8(2, 0x4c);
+    view.setUint8(3, 0x4f); view.setUint8(4, 0x52); view.setUint8(5, 0x3d);
+    view.setUint8(6, 26); view.setUint8(7, 166); view.setUint8(8, 97); view.setUint8(9, 255);
+    for (let i = 0; i < Math.min(header.length, 70); i++) {
+      view.setUint8(10 + i, header.charCodeAt(i) & 0x7f);
+    }
+  } else {
+    for (let i = 0; i < Math.min(header.length, 79); i++) {
+      view.setUint8(i, header.charCodeAt(i) & 0x7f);
+    }
+  }
 
   view.setUint32(HEADER, count, true);
 
@@ -55,7 +68,23 @@ export function writeBinarySTL(tris, name = 'Support Fins') {
       view.setFloat32(o + 16 + i * 12, p[1], true);
       view.setFloat32(o + 20 + i * 12, p[2], true);
     }
-    view.setUint16(o + 48, 0, true);
+    let packedColor = 0;
+    if (colors) {
+      const color = ArrayBuffer.isView(colors)
+        ? [colors[t * 3], colors[t * 3 + 1], colors[t * 3 + 2]]
+        : colors[t];
+      if (color && color.length >= 3) {
+        const toSrgb5 = (linear) => {
+          const c = Math.max(0, Math.min(1, linear));
+          const srgb = c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055;
+          return Math.round(srgb * 31);
+        };
+        packedColor = toSrgb5(color[0]) | (toSrgb5(color[1]) << 5) | (toSrgb5(color[2]) << 10);
+      } else {
+        packedColor = 0x8000; // use the header's default support color
+      }
+    }
+    view.setUint16(o + 48, packedColor, true);
     o += PER_TRI;
   }
 

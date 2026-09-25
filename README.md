@@ -31,6 +31,11 @@ now you had to CAD it by hand every time.
    lever?* — and it scores orientations for strength too.
 4. Export. Fins and a bed pad come baked into the STL (or 3MF).
 
+When the imported model has face colors, 3MF export preserves them with standard
+base materials. STL export writes per-face colors using a widely supported but
+unofficial binary STL convention; software support varies, so prefer 3MF when color
+preservation matters.
+
 **Why you pick the rotation, not the software:** "stronger" means nothing without a load
 direction, and the geometry doesn't contain one. Turn a solver fully loose and it'll hand
 you a part 155 mm tall balanced on a needle with two sail-sized fins — technically optimal,
@@ -95,11 +100,12 @@ Consortium's own reference files). The part imports correctly oriented and sized
 fins come in as intended. Just slice with supports off. (OrcaSlicer opens it without a
 notice.)
 
-The export ships **pure geometry with no slicer profile embedded** on purpose: baking
-in a profile would silence the notice but replace whoever-opens-it's printer/filament/
-print settings with ours on load, and it would have to be re-authored per slicer *and*
-per slicer version — a worse trade than a one-time, benign notice on a file whose
-geometry is already right. See `web/threemf.js` for the writer.
+The export carries geometry and, when present in the source, standard face display
+colors; it contains **no slicer profile** on purpose. Baking in a profile would silence
+the notice but replace whoever-opens-it's printer/filament/print settings with ours on
+load, and it would have to be re-authored per slicer *and* per slicer version — a worse
+trade than a one-time, benign notice on a file whose geometry is already right. See
+`web/threemf.js` for the writer.
 
 ## Run it locally
 

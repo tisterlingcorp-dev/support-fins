@@ -4,7 +4,7 @@
 import { writeBinarySTL, download } from '../stl.js';
 import { writeThreeMF } from '../threemf.js';
 import { el } from './dom.js';
-import { part, topology, lastResult, rotM3, partName, activeAdded } from '../app.js';
+import { part, topology, lastResult, rotM3, partName, activeAdded, partHasImportedColors } from '../app.js';
 
 /**
  * Export the part AS ORIENTED, seated on the plate, with the fins as extra
@@ -25,7 +25,15 @@ export function buildExportGeometry() {
   const { pos, nFaces } = topology;
 
   const partTris = new Array(nFaces * 3);
+  const partColors = partHasImportedColors ? new Float32Array(nFaces * 3) : null;
+  const sourceColors = partHasImportedColors ? part.geometry.getAttribute('sourceColor').array : null;
   for (let f = 0; f < nFaces; f++) {
+    if (partColors) {
+      const c = f * 9, color = f * 3;
+      partColors[color] = sourceColors[c];
+      partColors[color + 1] = sourceColors[c + 1];
+      partColors[color + 2] = sourceColors[c + 2];
+    }
     for (let i = 0; i < 3; i++) {
       const o = f * 9 + i * 3;
       const x = pos[o], y = pos[o + 1], z = pos[o + 2];
@@ -40,7 +48,7 @@ export function buildExportGeometry() {
   // in Suggest -- plus the pad, all already in print space
   const finTris = [...activeAdded()];
   const base = partName.replace(/\.(stl|3mf|step|stp)$/i, '') || 'part';
-  return { partTris, finTris, base };
+  return { partTris, finTris, partColors, base };
 }
 
 /**
@@ -52,7 +60,19 @@ export function buildExportGeometry() {
 el('export').addEventListener('click', () => {
   const g = buildExportGeometry();
   if (!g) return;
-  download(writeBinarySTL([...g.partTris, ...g.finTris], g.base), `${g.base}-fins.stl`);
+  const tris = [...g.partTris, ...g.finTris];
+  let colors = null;
+  if (g.partColors) {
+    colors = new Float32Array((tris.length / 3) * 3);
+    colors.set(g.partColors);
+    const supportColor = [0.1, 0.65, 0.38];
+    for (let i = g.partColors.length; i < colors.length; i += 3) {
+      colors[i] = supportColor[0];
+      colors[i + 1] = supportColor[1];
+      colors[i + 2] = supportColor[2];
+    }
+  }
+  download(writeBinarySTL(tris, g.base, colors), `${g.base}-fins.stl`);
 });
 
 // 3MF keeps the fins as a separate object and states millimeters, so the file
@@ -61,5 +81,5 @@ el('export').addEventListener('click', () => {
 el('export-3mf').addEventListener('click', () => {
   const g = buildExportGeometry();
   if (!g) return;
-  download(writeThreeMF(g.partTris, g.finTris, g.base), `${g.base}-fins.3mf`);
+  download(writeThreeMF(g.partTris, g.finTris, g.base, g.partColors), `${g.base}-fins.3mf`);
 });

@@ -39,6 +39,7 @@ const partMaterial = new THREE.MeshStandardMaterial({
 });
 export let part = null;
 export let partName = '';
+export let partHasImportedColors = false;
 export let topology = null;      // welded adjacency, rebuilt only when the mesh changes
 let weldMs = 0;
 export let analysisTiming = '';
@@ -147,8 +148,10 @@ export function setPart(geometry, filename) {
   // `color` attribute is the live diagnostic overlay; sourceColor is immutable
   // across shade() calls so rotating the part never destroys the source colors.
   const importedColors = geometry.getAttribute('color');
+  partHasImportedColors = !!(importedColors
+    && importedColors.count === geometry.getAttribute('position').count);
   const sourceColors = new Float32Array(nFaces * 9);
-  if (importedColors && importedColors.count === geometry.getAttribute('position').count) {
+  if (partHasImportedColors) {
     sourceColors.set(importedColors.array);
   } else {
     const base = SHADE.plain;

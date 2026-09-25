@@ -43,7 +43,17 @@ function fmt(n) {
  * identical transform of the same source point), which restores shared topology
  * and shrinks the file; anything that doesn't merge is left as-is and slices fine.
  */
-function meshXML(tris) {
+function linearToSrgb(linear) {
+  const c = Math.max(0, Math.min(1, Number.isFinite(linear) ? linear : 0));
+  return c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055;
+}
+
+function colorHex(color) {
+  if (!color || color.length < 3) return null;
+  return `#${color.map((c) => Math.round(linearToSrgb(c) * 255).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+function meshXML(tris, colorIndices = null) {
   const index = new Map();
   const verts = [];
   const faces = [];
@@ -62,7 +72,9 @@ function meshXML(tris) {
     }
     // Drop any triangle that collapsed to a line/point after the merge; a
     // degenerate face is invalid 3MF and some readers reject the whole model.
-    if (idx[0] !== idx[1] && idx[1] !== idx[2] && idx[0] !== idx[2]) faces.push(idx);
+    if (idx[0] !== idx[1] && idx[1] !== idx[2] && idx[0] !== idx[2]) {
+      faces.push({ idx, color: colorIndices ? colorIndices[t / 3] : null });
+    }
   }
 
   const v = new Array(verts.length);
@@ -72,14 +84,35 @@ function meshXML(tris) {
   }
   const f = new Array(faces.length);
   for (let i = 0; i < faces.length; i++) {
-    const t = faces[i];
-    f[i] = `<triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>`;
+    const { idx, color } = faces[i];
+    const props = color != null ? ` pid="4" p1="${color}"` : '';
+    f[i] = `<triangle v1="${idx[0]}" v2="${idx[1]}" v3="${idx[2]}"${props}/>`;
   }
   return `<mesh><vertices>${v.join('')}</vertices><triangles>${f.join('')}</triangles></mesh>`;
 }
 
-function modelXML(partTris, finTris, title) {
-  const objects = [`<object id="1" type="model">${meshXML(partTris)}</object>`];
+function modelXML(partTris, finTris, title, partColors) {
+  const palette = [];
+  const paletteIndex = new Map();
+  let colorIndices = null;
+  if (partColors) {
+    const faceCount = Math.floor(partColors.length / 3);
+    colorIndices = new Array(faceCount);
+    for (let face = 0; face < faceCount; face++) {
+      const i = face * 3;
+      const hex = colorHex([partColors[i], partColors[i + 1], partColors[i + 2]]);
+      if (!hex) { colorIndices[face] = null; continue; }
+      if (!paletteIndex.has(hex)) {
+        paletteIndex.set(hex, palette.length);
+        palette.push(hex);
+      }
+      colorIndices[face] = paletteIndex.get(hex);
+    }
+  }
+  const materials = palette.length
+    ? `<basematerials id="4">${palette.map((color, i) => `<base name="Color ${i + 1}" displaycolor="${color}"/>`).join('')}</basematerials>`
+    : '';
+  const objects = [`<object id="1" type="model">${meshXML(partTris, colorIndices)}</object>`];
   let buildId = 1;
 
   if (finTris && finTris.length) {
@@ -97,7 +130,7 @@ function modelXML(partTris, finTris, title) {
     `<model unit="millimeter" xml:lang="en-US" xmlns="${NS_CORE}">` +
     '<metadata name="Application">Support Fins</metadata>' +
     `<metadata name="Title">${safeTitle}</metadata>` +
-    `<resources>${objects.join('')}</resources>` +
+    `<resources>${materials}${objects.join('')}</resources>` +
     `<build><item objectid="${buildId}"/></build></model>`;
 }
 
@@ -116,11 +149,11 @@ const ROOT_RELS = '<?xml version="1.0" encoding="UTF-8"?>\n' +
  * @param name      written as the model Title
  * @returns Blob    a .3mf package
  */
-export function writeThreeMF(partTris, finTris, name = 'Support Fins') {
+export function writeThreeMF(partTris, finTris, name = 'Support Fins', partColors = null) {
   return zipStore([
     { name: '[Content_Types].xml', data: CONTENT_TYPES },
     { name: '_rels/.rels', data: ROOT_RELS },
-    { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name) },
+    { name: '3D/3dmodel.model', data: modelXML(partTris, finTris, name, partColors) },
   ]);
 }
 
