@@ -231,6 +231,15 @@ const local = (tag) => {
   return c < 0 ? tag : tag.slice(c + 1);
 };
 
+function displayColor(value) {
+  if (!value || !/^#[\da-f]{6}(?:[\da-f]{2})?$/i.test(value)) return null;
+  const linear = (byte) => {
+    const c = byte / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return [1, 3, 5].map((i) => linear(parseInt(value.slice(i, i + 2), 16)));
+}
+
 /**
  * An attribute by LOCAL name. The production extension is conventionally the
  * `p:` prefix (p:path, p:UUID), but the prefix is the file's to choose, so we
@@ -284,10 +293,12 @@ const SKIP_TYPES = new Set(['support', 'surface', 'other']);
 /** Parse one 3D/*.model part into { objects, items, unit }. */
 function parseModelXML(xml) {
   const objects = new Map();   // id -> { type, name, verts, tris, components }
+  const baseMaterials = new Map();
   const items = [];            // { objectid, transform }
   let unit = 'millimeter';
   let cur = null;              // object being filled
   let inVertices = false;
+  let baseColors = null;
 
   scanXML(xml, (tag, a, selfClosing) => {
     switch (local(tag)) {
@@ -295,9 +306,16 @@ function parseModelXML(xml) {
         if (a.unit) unit = a.unit;
         break;
       case 'object':
-        cur = { type: a.type || 'model', name: a.name || '', verts: [], tris: [], components: [] };
+        cur = { type: a.type || 'model', name: a.name || '', verts: [], tris: [], triColors: [], components: [] };
         objects.set(String(a.id), cur);
         if (selfClosing) cur = null;
+        break;
+      case 'basematerials':
+        baseColors = [];
+        baseMaterials.set(String(a.id), baseColors);
+        break;
+      case 'base':
+        if (baseColors) baseColors.push(a.displaycolor || null);
         break;
       case 'vertices':
         inVertices = true;
@@ -308,7 +326,11 @@ function parseModelXML(xml) {
         if (cur && inVertices) cur.verts.push(+a.x || 0, +a.y || 0, +a.z || 0);
         break;
       case 'triangle':
-        if (cur) cur.tris.push(+a.v1, +a.v2, +a.v3);
+        if (cur) {
+          cur.tris.push(+a.v1, +a.v2, +a.v3);
+          const palette = a.pid != null ? baseMaterials.get(String(a.pid)) : null;
+          cur.triColors.push(palette && a.p1 != null ? palette[+a.p1] || null : null);
+        }
         break;
       case 'component':
         // p:path (production extension) points the objectid at a DIFFERENT part
@@ -329,6 +351,7 @@ function parseModelXML(xml) {
     const t = local(tag);
     if (t === 'object') cur = null;
     else if (t === 'vertices') inVertices = false;
+    else if (t === 'basematerials') baseColors = null;
   });
 
   return { objects, items, unit };
@@ -366,7 +389,7 @@ function parseObjectNames(configXML) {
  * `seen` breaks a component cycle: a malformed file can reference itself, the
  * spec forbids it, so bailing is correct rather than recursing forever.
  */
-function emitObject(getPart, path, id, m, out, seen, stats) {
+function emitObject(getPart, path, id, m, out, outColors, colorState, seen, stats) {
   const part = getPart(path);
   const obj = part && part.objects.get(id);
   if (!obj) { stats.missing++; return; }        // dangling ref: a broken file
@@ -387,6 +410,8 @@ function emitObject(getPart, path, id, m, out, seen, stats) {
       stats.dropped++;
       continue;
     }
+    const rgb = displayColor(obj.triColors[t / 3]);
+    if (rgb) colorState.hasColor = true;
     for (const o of [o0, o1, o2]) {
       const x = verts[o], y = verts[o + 1], z = verts[o + 2];
       if (m) {
@@ -396,13 +421,15 @@ function emitObject(getPart, path, id, m, out, seen, stats) {
       } else {
         out.push(x, y, z);
       }
+      if (rgb) outColors.push(rgb[0], rgb[1], rgb[2]);
+      else outColors.push(1, 1, 1);
     }
   }
   if (tris.length) stats.meshes++;
 
   for (const c of obj.components) {
     const childPath = c.path ? partName(c.path) : path;
-    emitObject(getPart, childPath, c.objectid, compose(c.transform, m), out, seen, stats);
+    emitObject(getPart, childPath, c.objectid, compose(c.transform, m), out, outColors, colorState, seen, stats);
   }
   seen.delete(key);
 }
@@ -490,8 +517,10 @@ export async function readThreeMF(bytes) {
   const agg = { meshes: 0, skipped: 0, dropped: 0 };
   for (const item of roots) {
     const out = [];
+    const outColors = [];
+    const colorState = { hasColor: false };
     const stats = { meshes: 0, skipped: 0, dropped: 0, missing: 0 };
-    emitObject(getPart, rootName, item.objectid, item.transform, out, new Set(), stats);
+    emitObject(getPart, rootName, item.objectid, item.transform, out, outColors, colorState, new Set(), stats);
     // Fold stats first: a build item that was ALL support/dangling emits nothing
     // but its skipped count still has to be reported, not dropped with the item.
     agg.meshes += stats.meshes; agg.skipped += stats.skipped; agg.dropped += stats.dropped;
@@ -504,6 +533,7 @@ export async function readThreeMF(bytes) {
     objects.push({
       name: names.get(item.objectid) || (rootObj && rootObj.name) || `Object ${objects.length + 1}`,
       positions,
+      colors: colorState.hasColor ? new Float32Array(outColors) : null,
       tris: positions.length / 9,
       meshes: stats.meshes,
       skipped: stats.skipped,

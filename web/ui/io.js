@@ -27,9 +27,10 @@ function isZip(buffer) {
 }
 
 /** A three.js BufferGeometry from a flat mm position array (the STL layout). */
-function geometryFromPositions(positions) {
+function geometryFromPositions(positions, colors = null) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  if (colors) geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   return geometry;
 }
 
@@ -42,6 +43,19 @@ function mergeObjectPositions(objs) {
   let off = 0;
   for (const o of objs) { all.set(o.positions, off); off += o.positions.length; }
   return all;
+}
+
+function mergeObjectColors(objs) {
+  if (!objs.some((o) => o.colors)) return null;
+  const total = objs.reduce((n, o) => n + o.positions.length, 0);
+  const merged = new Float32Array(total);
+  let off = 0;
+  for (const o of objs) {
+    if (o.colors) merged.set(o.colors, off);
+    else merged.fill(1, off, off + o.positions.length);
+    off += o.positions.length;
+  }
+  return merged;
 }
 
 /**
@@ -134,7 +148,7 @@ async function parseModel(buffer) {
     if (!chosen) return null;               // cancelled: keep the current part
   }
 
-  const geometry = geometryFromPositions(mergeObjectPositions(chosen));
+  const geometry = geometryFromPositions(mergeObjectPositions(chosen), mergeObjectColors(chosen));
 
   // Say what we decided for them: which/how many bodies, any support bodies left
   // on the plate, and any unit conversion.

@@ -143,8 +143,23 @@ export function setPart(geometry, filename) {
   scene.add(part);
 
   const nFaces = geometry.getAttribute('position').count / 3;
-  geometry.setAttribute(
-    'color', new THREE.Float32BufferAttribute(new Float32Array(nFaces * 9), 3));
+  // Keep imported per-vertex/per-face colors as the base appearance. The
+  // `color` attribute is the live diagnostic overlay; sourceColor is immutable
+  // across shade() calls so rotating the part never destroys the source colors.
+  const importedColors = geometry.getAttribute('color');
+  const sourceColors = new Float32Array(nFaces * 9);
+  if (importedColors && importedColors.count === geometry.getAttribute('position').count) {
+    sourceColors.set(importedColors.array);
+  } else {
+    const base = SHADE.plain;
+    for (let i = 0; i < sourceColors.length; i += 3) {
+      sourceColors[i] = base.r;
+      sourceColors[i + 1] = base.g;
+      sourceColors[i + 2] = base.b;
+    }
+  }
+  geometry.setAttribute('sourceColor', new THREE.Float32BufferAttribute(sourceColors, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(sourceColors.slice(), 3));
 
   const tWeld = performance.now();
   topology = buildTopology(geometry);
@@ -226,11 +241,17 @@ export function shade() {
 
   const colors = part.geometry.getAttribute('color');
   const arr = colors.array;
+  const source = part.geometry.getAttribute('sourceColor').array;
   for (let f = 0; f < topology.nFaces; f++) {
     const c = res.kept[f] ? SHADE.over : res.onBed[f] ? SHADE.bed : SHADE.plain;
     for (let i = 0; i < 3; i++) {
       const o = f * 9 + i * 3;
-      arr[o] = c.r; arr[o + 1] = c.g; arr[o + 2] = c.b;
+      // Tint only diagnostic faces, leaving the imported material visible
+      // underneath. Plain faces retain their exact source color.
+      const amount = res.kept[f] ? 0.5 : res.onBed[f] ? 0.35 : 0;
+      arr[o] = source[o] * (1 - amount) + c.r * amount;
+      arr[o + 1] = source[o + 1] * (1 - amount) + c.g * amount;
+      arr[o + 2] = source[o + 2] * (1 - amount) + c.b * amount;
     }
   }
   colors.needsUpdate = true;
